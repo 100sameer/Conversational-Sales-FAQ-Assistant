@@ -1,6 +1,6 @@
 """
 Enhanced Streamlit app for Conversational Sales FAQ Assistant.
-Features: Modern UI, chat history management, export capabilities, document management, and more.
+Fully working version with modern UI and additional features.
 """
 
 import os
@@ -9,12 +9,9 @@ import shutil
 import traceback
 import json
 from datetime import datetime
-import hashlib
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from streamlit_option_menu import option_menu
 
 # Try multiple import paths for compatibility across langchain versions
 try:
@@ -51,7 +48,6 @@ st.set_page_config(
     page_title="PragyanAI Assistant",
     page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
 # Custom CSS for enhanced UI
@@ -66,25 +62,20 @@ st.markdown("""
     .stChatMessage {
         border-radius: 15px;
         padding: 10px;
-        margin: 5px 0;
+        margin: 10px 0;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        animation: slideIn 0.3s ease;
     }
     
-    /* User message */
-    .stChatMessage[data-testid="user"] {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-    }
-    
-    /* Assistant message */
-    .stChatMessage[data-testid="assistant"] {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-    }
-    
-    /* Sidebar styling */
-    .css-1d391kg {
-        background: linear-gradient(180deg, #2c3e50 0%, #3498db 100%);
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
     }
     
     /* Custom button styling */
@@ -96,26 +87,33 @@ st.markdown("""
         padding: 10px 20px;
         font-weight: bold;
         transition: all 0.3s ease;
+        width: 100%;
     }
     
     .stButton > button:hover {
-        transform: scale(1.05);
+        transform: scale(1.02);
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     
-    /* Metrics cards */
+    /* Sidebar styling */
+    .css-1d391kg {
+        background: linear-gradient(180deg, #2c3e50 0%, #34495e 100%);
+    }
+    
+    /* Metric cards */
     .metric-card {
         background: white;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         text-align: center;
+        margin: 10px 0;
         transition: transform 0.3s ease;
     }
     
     .metric-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 15px rgba(0,0,0,0.2);
+        transform: translateY(-3px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
     }
     
     /* Status indicators */
@@ -129,20 +127,23 @@ st.markdown("""
         font-weight: bold;
     }
     
-    /* Document upload area */
-    .upload-area {
-        border: 2px dashed #3498db;
-        border-radius: 15px;
+    /* Welcome banner */
+    .welcome-banner {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 20px;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 20px;
         text-align: center;
-        background: rgba(52, 152, 219, 0.1);
     }
     
-    /* Responsive design */
-    @media (max-width: 768px) {
-        .main {
-            padding: 10px;
-        }
+    /* Info box */
+    .info-box {
+        background: #f8f9fa;
+        border-left: 4px solid #667eea;
+        padding: 10px 15px;
+        border-radius: 5px;
+        margin: 10px 0;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -150,29 +151,36 @@ st.markdown("""
 # -------------------------------
 # CONFIG / SECRETS
 # -------------------------------
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_API_KEY = None
+if "GROQ_API_KEY" in st.secrets:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+else:
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 if not GROQ_API_KEY:
-    st.warning("⚠️ GROQ_API_KEY is not set. Please configure it in secrets or environment variables.")
+    st.sidebar.warning("⚠️ GROQ_API_KEY is not set. Set it in Streamlit secrets or as env var.")
+
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # -------------------------------
 # LLM INITIALIZATION
 # -------------------------------
 @st.cache_resource
-def initialize_llm():
+def get_llm():
+    """Initialize and cache the LLM client."""
+    if not GROQ_API_KEY:
+        return None
     try:
         return ChatGroq(
             model_name=GROQ_MODEL,
             groq_api_key=GROQ_API_KEY,
             temperature=0.3,
-            max_retries=2,
         )
     except Exception as e:
-        st.error(f"Failed to initialize LLM: {e}")
+        st.error(f"Failed to initialize ChatGroq LLM: {e}")
         return None
 
-llm = initialize_llm()
+llm = get_llm()
 
 # -------------------------------
 # PERSONAS / SYSTEM PROMPTS
@@ -220,22 +228,24 @@ If placement details are not in context, mention that specific placement data is
 # -------------------------------
 @st.cache_resource
 def get_embeddings():
+    """Get cached embeddings model."""
     return HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
 embeddings = get_embeddings()
 
 # -------------------------------
-# VECTORSTORE MANAGEMENT
+# VECTORSTORE / DOCUMENT LOADING
 # -------------------------------
 FAISS_STORE_DIR = "faiss_store"
 
 @st.cache_resource
 def build_or_load_vectorstore():
-    """Build or load vectorstore with caching."""
+    """
+    Build a FAISS index from an Excel fallback or load a persisted index from disk.
+    """
+    # If a persisted index exists, load it
     if os.path.exists(FAISS_STORE_DIR):
         try:
             vs = FAISS.load_local(FAISS_STORE_DIR, embeddings, allow_dangerous_deserialization=True)
@@ -243,31 +253,30 @@ def build_or_load_vectorstore():
         except Exception as e:
             st.warning(f"Failed to load existing FAISS store: {e}. Rebuilding...")
 
+    # Otherwise build from an optional Excel fallback file
     docs = []
-    # Load from Excel if available
     if os.path.exists("pragyan_faq_prices.xlsx"):
         try:
             df = pd.read_excel("pragyan_faq_prices.xlsx")
             for _, row in df.iterrows():
                 text = "\n".join([f"{c}: {row[c]}" for c in df.columns])
                 docs.append(Document(page_content=text))
-            st.success(f"Loaded {len(docs)} documents from Excel")
         except Exception as e:
             st.warning(f"Failed to read pragyan_faq_prices.xlsx: {e}")
 
     if len(docs) == 0:
-        docs.append(Document(page_content="PragyanAI AI Program - Basic information."))
+        docs.append(Document(page_content="PragyanAI AI Program - Comprehensive educational platform offering AI courses, placement assistance, and institutional partnerships."))
 
     vs = FAISS.from_documents(docs, embeddings)
     try:
         vs.save_local(FAISS_STORE_DIR)
     except Exception:
-        st.warning("Could not save FAISS store to disk.")
+        st.warning("Could not save FAISS store to disk (permissions?). Continuing without persistence.")
     return vs
 
 try:
     vectorstore = build_or_load_vectorstore()
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
     vectorstore_ready = True
 except Exception as e:
     st.error(f"Failed to initialize vectorstore: {e}")
@@ -279,406 +288,242 @@ except Exception as e:
 # -------------------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "document_count" not in st.session_state:
-    st.session_state.document_count = 0
+if "chat_count" not in st.session_state:
+    st.session_state.chat_count = 0
 if "feedback" not in st.session_state:
     st.session_state.feedback = {}
-if "user_preferences" not in st.session_state:
-    st.session_state.user_preferences = {
-        "theme": "light",
-        "response_length": "medium",
-        "language": "English"
-    }
 
 # -------------------------------
 # SIDEBAR - ENHANCED
 # -------------------------------
-with st.sidebar:
-    st.image("https://via.placeholder.com/150x50?text=PragyanAI", use_column_width=True)
-    st.markdown("---")
-    
-    # Navigation Menu
-    selected = option_menu(
-        menu_title="Navigation",
-        options=["💬 Chat", "📊 Analytics", "📚 Documents", "⚙️ Settings"],
-        icons=["chat", "graph-up", "book", "gear"],
-        menu_icon="cast",
-        default_index=0,
-        styles={
-            "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"color": "white", "font-size": "20px"},
-            "nav-link": {"color": "white", "font-size": "16px", "text-align": "left", "margin": "0px"},
-            "nav-link-selected": {"background-color": "rgba(255,255,255,0.2)"},
+st.sidebar.title("🤖 PragyanAI")
+
+# Display system status
+st.sidebar.markdown("---")
+st.sidebar.subheader("📊 System Status")
+
+llm_status = "🟢 Online" if llm else "🔴 Offline"
+db_status = "🟢 Connected" if vectorstore_ready else "🔴 Disconnected"
+
+col1, col2 = st.sidebar.columns(2)
+col1.metric("LLM", llm_status)
+col2.metric("Database", db_status)
+
+st.sidebar.markdown("---")
+
+# Persona Selection
+st.sidebar.subheader("🎯 Select Persona")
+persona = st.sidebar.selectbox(
+    "Choose Role",
+    list(SALES_PROMPTS.keys()),
+    help="Select the AI's role for specialized responses"
+)
+
+st.sidebar.markdown("---")
+
+# Document Upload Section
+st.sidebar.subheader("📄 Upload Documents")
+uploaded_files = st.sidebar.file_uploader(
+    "Upload PDFs",
+    accept_multiple_files=True,
+    type=["pdf"],
+    help="Upload PDF documents to enhance the knowledge base"
+)
+
+# Document count
+if vectorstore_ready:
+    try:
+        doc_count = len(vectorstore.index_to_docstore_id) if hasattr(vectorstore, 'index_to_docstore_id') else 0
+        st.sidebar.metric("📚 Documents in DB", doc_count)
+    except:
+        pass
+
+st.sidebar.markdown("---")
+
+# Quick Actions
+st.sidebar.subheader("⚡ Quick Actions")
+
+if st.sidebar.button("🗑️ Clear Chat History", use_container_width=True):
+    st.session_state.messages = []
+    st.session_state.chat_count = 0
+    st.rerun()
+
+if st.sidebar.button("💾 Export Chat History", use_container_width=True):
+    if st.session_state.messages:
+        export_data = {
+            "timestamp": datetime.now().isoformat(),
+            "messages": st.session_state.messages,
+            "persona": persona
         }
-    )
-    
-    st.markdown("---")
-    
-    # Persona Selection
-    st.subheader("🎯 Persona")
-    persona = st.selectbox(
-        "Select Role",
-        list(SALES_PROMPTS.keys()),
-        help="Choose the AI's role for specialized responses"
-    )
-    
-    st.markdown("---")
-    
-    # Document Upload Section
-    st.subheader("📄 Document Management")
-    uploaded_files = st.file_uploader(
-        "Upload PDFs",
-        accept_multiple_files=True,
-        type=["pdf"],
-        help="Upload PDF documents to enhance the knowledge base"
-    )
-    
-    # Document Stats
-    if vectorstore_ready:
-        try:
-            doc_count = len(vectorstore.index_to_docstore_id) if hasattr(vectorstore, 'index_to_docstore_id') else 0
-            st.metric("📚 Documents in DB", doc_count)
-        except:
-            pass
-    
-    st.markdown("---")
-    
-    # Quick Actions
-    st.subheader("⚡ Quick Actions")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🗑️ Clear Chat", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
-    with col2:
-        if st.button("💾 Export Chat", use_container_width=True):
-            export_chat()
-    
-    if st.button("🔄 Reset Vectorstore", use_container_width=True):
-        if os.path.exists(FAISS_STORE_DIR):
-            shutil.rmtree(FAISS_STORE_DIR)
-        st.cache_resource.clear()
-        st.rerun()
-    
-    st.markdown("---")
-    
-    # Status Indicator
-    st.subheader("📊 System Status")
-    status_col1, status_col2 = st.columns(2)
-    with status_col1:
-        llm_status = "🟢 Online" if llm else "🔴 Offline"
-        st.markdown(f"**LLM:** {llm_status}")
-    with status_col2:
-        db_status = "🟢 Connected" if vectorstore_ready else "🔴 Disconnected"
-        st.markdown(f"**Database:** {db_status}")
-
-# -------------------------------
-# MAIN CONTENT AREA
-# -------------------------------
-if selected == "💬 Chat":
-    st.title("🤖 PragyanAI AI Assistant")
-    st.markdown("*Your intelligent companion for sales and support inquiries*")
-    
-    # Display chat messages
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            # Add feedback buttons for assistant messages
-            if msg["role"] == "assistant" and len(st.session_state.messages) > 1:
-                col1, col2, col3 = st.columns([1, 1, 8])
-                with col1:
-                    if st.button("👍", key=f"like_{msg['id']}" if 'id' in msg else "like"):
-                        st.toast("Thanks for your feedback! 👍")
-                with col2:
-                    if st.button("👎", key=f"dislike_{msg['id']}" if 'id' in msg else "dislike"):
-                        st.toast("We'll improve our responses! 👎")
-    
-    # Chat input
-    if prompt := st.chat_input("Ask anything about PragyanAI programs..."):
-        # Add user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        # Generate response
-        if vectorstore_ready and llm:
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    try:
-                        # Retrieve relevant documents
-                        docs = retriever.get_relevant_documents(prompt)
-                        context = "\n\n".join(d.page_content for d in docs)
-                        
-                        # Prepare prompt
-                        system_prompt = SALES_PROMPTS[persona].format(context=context)
-                        full_prompt = system_prompt + "\n\nUser: " + prompt
-                        
-                        # Get response
-                        response = llm.invoke(full_prompt)
-                        answer = response.content if hasattr(response, 'content') else str(response)
-                        
-                        # Display response
-                        st.markdown(answer)
-                        
-                        # Add to session
-                        st.session_state.messages.append({
-                            "role": "assistant", 
-                            "content": answer,
-                            "id": len(st.session_state.messages)
-                        })
-                        
-                        # Show source documents
-                        with st.expander("📚 Source Documents"):
-                            for i, doc in enumerate(docs, 1):
-                                st.text(f"Source {i}:")
-                                st.text(doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content)
-                                st.divider()
-                                
-                    except Exception as e:
-                        st.error(f"Error generating response: {e}")
-                        st.debug(traceback.format_exc())
-        else:
-            st.error("System not properly initialized. Please check the sidebar status.")
-
-elif selected == "📊 Analytics":
-    st.title("📊 Chat Analytics")
-    
-    # Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown("""
-        <div class="metric-card">
-            <h3>💬 Total Messages</h3>
-            <h2>{}</h2>
-        </div>
-        """.format(len(st.session_state.messages)), unsafe_allow_html=True)
-    
-    with col2:
-        user_msgs = sum(1 for msg in st.session_state.messages if msg["role"] == "user")
-        st.markdown("""
-        <div class="metric-card">
-            <h3>👤 User Messages</h3>
-            <h2>{}</h2>
-        </div>
-        """.format(user_msgs), unsafe_allow_html=True)
-    
-    with col3:
-        assistant_msgs = len(st.session_state.messages) - user_msgs
-        st.markdown("""
-        <div class="metric-card">
-            <h3>🤖 Assistant Messages</h3>
-            <h2>{}</h2>
-        </div>
-        """.format(assistant_msgs), unsafe_allow_html=True)
-    
-    with col4:
-        ratio = (assistant_msgs / user_msgs * 100) if user_msgs > 0 else 0
-        st.markdown("""
-        <div class="metric-card">
-            <h3>📈 Response Ratio</h3>
-            <h2>{:.1f}%</h2>
-        </div>
-        """.format(ratio), unsafe_allow_html=True)
-    
-    # Chat Activity Chart
-    if len(st.session_state.messages) > 0:
-        st.subheader("📊 Chat Activity")
-        # Create mock data for visualization
-        messages_data = pd.DataFrame([
-            {"time": datetime.now().strftime("%H:%M"), "type": msg["role"], "count": 1}
-            for msg in st.session_state.messages[-20:]  # Last 20 messages
-        ])
-        if len(messages_data) > 0:
-            fig = px.bar(messages_data, x="time", y="count", color="type", 
-                        title="Recent Chat Activity", barmode="group")
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # Usage Statistics
-    st.subheader("📈 Usage Statistics")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info("**Current Session**")
-        st.write(f"• Messages: {len(st.session_state.messages)}")
-        st.write(f"• Persona: {persona}")
-        st.write(f"• Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    
-    with col2:
-        st.info("**System Information**")
-        st.write(f"• LLM Model: {GROQ_MODEL}")
-        st.write(f"• Embedding: all-MiniLM-L6-v2")
-        st.write(f"• Status: {'🟢 Active' if llm else '🔴 Inactive'}")
-
-elif selected == "📚 Documents":
-    st.title("📚 Document Management")
-    
-    # Document Upload Area
-    st.subheader("📤 Upload New Documents")
-    with st.container():
-        st.markdown("""
-        <div class="upload-area">
-            <h4>📁 Drop your PDF files here</h4>
-            <p>Supported formats: PDF, TXT, Markdown</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        uploaded_docs = st.file_uploader(
-            "Choose files",
-            accept_multiple_files=True,
-            type=["pdf", "txt", "md"],
-            label_visibility="collapsed"
+        json_data = json.dumps(export_data, indent=2)
+        st.sidebar.download_button(
+            label="📥 Download JSON",
+            data=json_data,
+            file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
+            use_container_width=True
         )
-        
-        if uploaded_docs:
-            if st.button("📥 Process Documents", use_container_width=True):
-                process_uploaded_documents(uploaded_docs)
-    
-    # Document List
-    st.subheader("📖 Document Library")
-    if vectorstore_ready:
-        try:
-            docs = vectorstore.index_to_docstore_id if hasattr(vectorstore, 'index_to_docstore_id') else {}
-            if docs:
-                for doc_id, doc in list(docs.items())[:10]:  # Show first 10
-                    with st.expander(f"📄 Document {doc_id[:8]}..."):
-                        st.text(doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content)
-            else:
-                st.info("No documents in the database yet. Upload some documents to get started!")
-        except:
-            st.info("Unable to list documents")
     else:
-        st.warning("Vectorstore not initialized")
-
-elif selected == "⚙️ Settings":
-    st.title("⚙️ Settings")
-    
-    # User Preferences
-    st.subheader("👤 User Preferences")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.session_state.user_preferences["theme"] = st.selectbox(
-            "Theme",
-            ["Light", "Dark", "System"],
-            index=["Light", "Dark", "System"].index(st.session_state.user_preferences["theme"])
-        )
-    with col2:
-        st.session_state.user_preferences["response_length"] = st.select_slider(
-            "Response Length",
-            options=["Short", "Medium", "Detailed"],
-            value=st.session_state.user_preferences["response_length"]
-        )
-    
-    # LLM Settings
-    st.subheader("🤖 Model Settings")
-    col1, col2 = st.columns(2)
-    with col1:
-        temperature = st.slider(
-            "Temperature",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.3,
-            step=0.1,
-            help="Higher values make output more creative but less focused"
-        )
-    with col2:
-        max_tokens = st.number_input(
-            "Max Tokens",
-            min_value=100,
-            max_value=2000,
-            value=500,
-            step=100
-        )
-    
-    if st.button("💾 Save Settings", use_container_width=True):
-        st.success("Settings saved successfully!")
-        st.toast("Settings updated! 🎉")
-    
-    # Advanced Settings
-    st.subheader("🔧 Advanced Settings")
-    with st.expander("Advanced Configuration"):
-        st.text_input("Vectorstore Path", value=FAISS_STORE_DIR)
-        st.text_input("Embedding Model", value="sentence-transformers/all-MiniLM-L6-v2")
-        if st.button("🔄 Rebuild Vectorstore"):
-            if os.path.exists(FAISS_STORE_DIR):
-                shutil.rmtree(FAISS_STORE_DIR)
-            st.cache_resource.clear()
-            st.success("Vectorstore rebuilt successfully!")
-            st.rerun()
-    
-    # Export/Import
-    st.subheader("💾 Data Management")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📤 Export All Data", use_container_width=True):
-            export_all_data()
-    with col2:
-        if st.button("📥 Import Data", use_container_width=True):
-            st.info("Import functionality coming soon")
+        st.sidebar.info("No chat history to export")
 
 # -------------------------------
-# HELPER FUNCTIONS
+# ADD NEW PDFS (UPLOAD)
 # -------------------------------
-def process_uploaded_documents(uploaded_docs):
-    """Process uploaded documents and add to vectorstore."""
-    tmp_files = []
+if uploaded_files:
     docs_to_add = []
+    tmp_files = []
+    progress_text = st.sidebar.empty()
+    progress_bar = st.sidebar.progress(0)
     
     try:
-        progress_bar = st.progress(0)
-        for i, uploaded in enumerate(uploaded_docs):
+        for i, uploaded in enumerate(uploaded_files):
+            progress_text.text(f"Processing {uploaded.name}...")
             tmp_path = safe_write_uploaded_file(uploaded)
             tmp_files.append(tmp_path)
             
             try:
-                if uploaded.type == "application/pdf":
-                    loader = PyPDFLoader(tmp_path)
-                    loaded = loader.load()
-                    docs_to_add.extend(loaded)
-                else:
-                    # Handle text files
-                    with open(tmp_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        docs_to_add.append(Document(page_content=content))
+                loader = PyPDFLoader(tmp_path)
+                loaded = loader.load()
+                docs_to_add.extend(loaded)
             except Exception as e:
-                st.error(f"Failed to load {uploaded.name}: {e}")
+                st.sidebar.error(f"Failed to load {uploaded.name}: {e}")
             
-            progress_bar.progress((i + 1) / len(uploaded_docs))
+            progress_bar.progress((i + 1) / len(uploaded_files))
         
         if docs_to_add and vectorstore_ready:
             chunks = chunk_documents(docs_to_add)
-            vectorstore.add_documents(chunks)
             try:
-                vectorstore.save_local(FAISS_STORE_DIR)
-            except:
-                pass
-            st.success(f"✅ Successfully processed {len(uploaded_docs)} documents!")
-            st.session_state.document_count += len(uploaded_docs)
-        else:
-            st.warning("No valid documents found to process")
-            
-    except Exception as e:
-        st.error(f"Error processing documents: {e}")
+                vectorstore.add_documents(chunks)
+                try:
+                    vectorstore.save_local(FAISS_STORE_DIR)
+                except Exception:
+                    pass
+                st.sidebar.success(f"✅ Added {len(docs_to_add)} documents successfully!")
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"Failed to add documents: {e}")
     finally:
+        progress_text.empty()
+        progress_bar.empty()
+        # Cleanup temporary files
         for p in tmp_files:
             try:
                 os.remove(p)
-            except:
+            except Exception:
                 pass
 
+# -------------------------------
+# MAIN CONTENT
+# -------------------------------
+# Welcome banner
+st.markdown("""
+<div class="welcome-banner">
+    <h1>🤖 PragyanAI Assistant</h1>
+    <p>Your intelligent companion for academic and career guidance</p>
+</div>
+""", unsafe_allow_html=True)
+
+# Display chat statistics
+if st.session_state.messages:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("💬 Total Messages", len(st.session_state.messages))
+    with col2:
+        user_msgs = sum(1 for msg in st.session_state.messages if msg["role"] == "user")
+        st.metric("👤 User Questions", user_msgs)
+    with col3:
+        assistant_msgs = len(st.session_state.messages) - user_msgs
+        st.metric("🤖 AI Responses", assistant_msgs)
+
+# Chat display area
+chat_container = st.container()
+
+with chat_container:
+    # Display chat messages
+    for idx, msg in enumerate(st.session_state.messages):
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+            # Add feedback buttons for assistant messages
+            if msg["role"] == "assistant" and idx > 0:
+                col1, col2, col3 = st.columns([1, 1, 8])
+                with col1:
+                    if st.button("👍", key=f"like_{idx}"):
+                        st.session_state.feedback[idx] = "positive"
+                        st.toast("Thanks for your feedback! 👍", icon="👍")
+                with col2:
+                    if st.button("👎", key=f"dislike_{idx}"):
+                        st.session_state.feedback[idx] = "negative"
+                        st.toast("We'll improve our responses! 👎", icon="👎")
+
+# Chat input
+if prompt := st.chat_input("Ask anything about PragyanAI programs..."):
+    # Add user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    # Generate response
+    if vectorstore_ready and llm:
+        with st.chat_message("assistant"):
+            with st.spinner("🤔 Thinking..."):
+                try:
+                    # Retrieve relevant documents
+                    docs = retriever.get_relevant_documents(prompt)
+                    context = "\n\n".join(d.page_content for d in docs)
+                    
+                    # Prepare prompt
+                    system_prompt = SALES_PROMPTS[persona].format(context=context)
+                    full_prompt = system_prompt + "\n\nUser: " + prompt
+                    
+                    # Get response
+                    response = llm.invoke(full_prompt)
+                    answer = response.content if hasattr(response, 'content') else str(response)
+                    
+                    # Display response
+                    st.markdown(answer)
+                    
+                    # Show source documents in expandable section
+                    with st.expander("📚 View Source Documents"):
+                        for i, doc in enumerate(docs, 1):
+                            st.markdown(f"**Source {i}:**")
+                            st.text(doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content)
+                            st.divider()
+                    
+                    # Add to session
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": answer
+                    })
+                    st.session_state.chat_count += 1
+                    
+                except Exception as e:
+                    st.error(f"Error generating response: {e}")
+                    st.debug(traceback.format_exc())
+                    answer = "I encountered an error while processing your request. Please try again."
+                    st.markdown(answer)
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": answer
+                    })
+    else:
+        st.error("⚠️ System not properly initialized. Please check the sidebar status indicators.")
+
+# -------------------------------
+# HELPERS
+# -------------------------------
 def chunk_documents(docs, chunk_size=1000, chunk_overlap=200):
-    """Split documents into chunks."""
+    """Split long documents into chunks for better retrieval."""
     if CharacterTextSplitter is None:
         out = []
         for d in docs:
             text = d.page_content
             for i in range(0, len(text), chunk_size - chunk_overlap):
-                out.append(Document(page_content=text[i:i + chunk_size]))
+                out.append(Document(page_content=text[i : i + chunk_size]))
         return out
-    
+
     splitter = CharacterTextSplitter(
-        chunk_size=chunk_size, 
-        chunk_overlap=chunk_overlap
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
     )
     out = []
     for d in docs:
@@ -687,7 +532,9 @@ def chunk_documents(docs, chunk_size=1000, chunk_overlap=200):
     return out
 
 def safe_write_uploaded_file(uploaded_file) -> str:
-    """Write uploaded file to secure temporary file."""
+    """
+    Write a Streamlit UploadedFile to a secure temporary file and return path.
+    """
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     try:
         tmp.write(uploaded_file.read())
@@ -698,56 +545,19 @@ def safe_write_uploaded_file(uploaded_file) -> str:
         try:
             tmp.close()
             os.unlink(tmp.name)
-        except:
+        except Exception:
             pass
         raise
-
-def export_chat():
-    """Export chat history as JSON."""
-    if st.session_state.messages:
-        export_data = {
-            "timestamp": datetime.now().isoformat(),
-            "messages": st.session_state.messages,
-            "persona": persona if 'persona' in locals() else "Unknown"
-        }
-        json_data = json.dumps(export_data, indent=2)
-        st.download_button(
-            label="📥 Download Chat JSON",
-            data=json_data,
-            file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json"
-        )
-    else:
-        st.warning("No chat history to export")
-
-def export_all_data():
-    """Export all data including chat history and settings."""
-    export_data = {
-        "timestamp": datetime.now().isoformat(),
-        "chat_history": st.session_state.messages,
-        "settings": {
-            "persona": persona if 'persona' in locals() else "Unknown",
-            "user_preferences": st.session_state.user_preferences,
-            "model": GROQ_MODEL
-        }
-    }
-    json_data = json.dumps(export_data, indent=2)
-    st.download_button(
-        label="📥 Download Complete Export",
-        data=json_data,
-        file_name=f"pragyanai_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-        mime="application/json"
-    )
 
 # -------------------------------
 # FOOTER
 # -------------------------------
 st.markdown("---")
 st.markdown(
-    """
-    <div style='text-align: center; color: #666; padding: 20px;'>
+    f"""
+    <div style='text-align: center; color: #666; padding: 10px;'>
         <p>🤖 PragyanAI Assistant v2.0 | Powered by <a href='https://groq.com' target='_blank'>Groq</a></p>
-        <p style='font-size: 12px;'>Made with ❤️ for the PragyanAI Community</p>
+        <p style='font-size: 12px;'>Active Persona: {persona} | Model: {GROQ_MODEL}</p>
     </div>
     """,
     unsafe_allow_html=True
