@@ -6,15 +6,12 @@ Notes:
 - It persists FAISS to "faiss_store" to avoid re-building embeddings every run.
 - Uploaded PDFs are written to a secure temporary file and removed after use.
 - Retriever and LLM calls are wrapped with fallbacks and error messages.
-- Enhanced with modern UI, chat statistics, feedback system, and more features.
 """
 
 import os
 import tempfile
 import shutil
 import traceback
-import json
-from datetime import datetime
 
 import streamlit as st
 import pandas as pd
@@ -62,78 +59,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# Custom CSS for enhanced UI
-st.markdown("""
-<style>
-    /* Chat message styling with animations */
-    .stChatMessage {
-        border-radius: 15px;
-        padding: 10px;
-        margin: 10px 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        animation: slideIn 0.3s ease;
-    }
-    
-    @keyframes slideIn {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-    
-    /* Custom button styling */
-    .stButton > button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        border-radius: 25px;
-        padding: 10px 20px;
-        font-weight: bold;
-        transition: all 0.3s ease;
-        width: 100%;
-    }
-    
-    .stButton > button:hover {
-        transform: scale(1.02);
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-    }
-    
-    /* Welcome banner */
-    .welcome-banner {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        margin-bottom: 20px;
-        text-align: center;
-    }
-    
-    /* Metric cards */
-    .metric-card {
-        background: white;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        text-align: center;
-        margin: 5px 0;
-    }
-    
-    /* Status indicators */
-    .status-online {
-        color: #2ecc71;
-        font-weight: bold;
-    }
-    .status-offline {
-        color: #e74c3c;
-        font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 # -------------------------------
 # CONFIG / SECRETS
 # -------------------------------
@@ -168,40 +93,33 @@ except Exception as e:
 # PERSONAS / SYSTEM PROMPTS
 # -------------------------------
 SALES_PROMPTS = {
-    "🎓 Student Counselor": """
-You are Aarav, an Academic & Career Advisor at PragyanAI.
+    "PragyanAI Student Counselor": """
+You are Aarav, an Academic & Career Advisor.
 
-Answer ONLY from the context provided below.
-
-Context:
-{context}
-
-If the answer is not available in the context, respond with:
-"I couldn't find this information in the uploaded documents. Please check with our team for more details."
-
-Always be empathetic, encouraging, and professional in your responses.
-""",
-    "🏛️ Institution Advisor": """
-You are an Institutional Relations Lead at PragyanAI.
-
-Answer only from the context provided.
+Answer ONLY from the context.
 
 Context:
 {context}
 
-Focus on partnerships, institutional benefits, and program details.
-If information is not found, politely suggest contacting the partnerships team.
+If answer is not available,
+say:
+'I couldn't find this information in the uploaded documents.'
 """,
-    "💼 Placement Lead": """
-You are an Enterprise Placement Lead at PragyanAI.
+    "Institution Advisor": """
+You are an Institutional Relations Lead.
+
+Answer only from the context.
+
+Context:
+{context}
+""",
+    "Placement Lead": """
+You are an Enterprise Placement Lead.
 
 Answer only from context.
 
 Context:
 {context}
-
-Emphasize placement statistics, company partnerships, and career outcomes.
-If placement details are not in context, mention that specific placement data is available upon request.
 """,
 }
 
@@ -227,7 +145,7 @@ def build_or_load_vectorstore():
     # If a persisted index exists, load it
     if os.path.exists(FAISS_STORE_DIR):
         try:
-            vs = FAISS.load_local(FAISS_STORE_DIR, embeddings, allow_dangerous_deserialization=True)
+            vs = FAISS.load_local(FAISS_STORE_DIR, embeddings)
             return vs
         except Exception as e:
             st.warning(f"Failed to load existing FAISS store: {e}. Rebuilding...")
@@ -244,7 +162,7 @@ def build_or_load_vectorstore():
             st.warning(f"Failed to read pragyan_faq_prices.xlsx: {e}")
 
     if len(docs) == 0:
-        docs.append(Document(page_content="PragyanAI AI Program - Comprehensive educational platform offering AI courses, placement assistance, and institutional partnerships."))
+        docs.append(Document(page_content="PragyanAI AI Program."))
 
     vs = FAISS.from_documents(docs, embeddings)
     try:
@@ -257,79 +175,29 @@ vectorstore = build_or_load_vectorstore()
 retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
 # -------------------------------
-# SESSION STATE INITIALIZATION
-# -------------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "chat_count" not in st.session_state:
-    st.session_state.chat_count = 0
-if "feedback" not in st.session_state:
-    st.session_state.feedback = {}
-
-# -------------------------------
 # SIDEBAR
 # -------------------------------
-st.sidebar.title("⚙️ Settings")
+st.sidebar.title("Settings")
 
-# System Status
-st.sidebar.markdown("---")
-st.sidebar.subheader("📊 System Status")
-status_col1, status_col2 = st.sidebar.columns(2)
-llm_status = "🟢 Online" if llm else "🔴 Offline"
-db_status = "🟢 Connected" if vectorstore else "🔴 Disconnected"
-status_col1.metric("LLM", llm_status)
-status_col2.metric("Database", db_status)
+persona = st.sidebar.selectbox("Choose Persona", list(SALES_PROMPTS.keys()))
 
-st.sidebar.markdown("---")
-
-# Persona Selection
-persona = st.sidebar.selectbox("🎯 Choose Persona", list(SALES_PROMPTS.keys()))
-
-st.sidebar.markdown("---")
-
-# Document Upload
 uploaded_files = st.sidebar.file_uploader(
-    "📄 Upload PDFs",
+    "Upload PDFs",
     accept_multiple_files=True,
     type=["pdf"],
-    help="Upload PDF documents to enhance the knowledge base"
 )
 
-# Document Count
+# Show document count in sidebar
 try:
     doc_count = len(vectorstore.index_to_docstore_id) if hasattr(vectorstore, 'index_to_docstore_id') else 0
-    st.sidebar.metric("📚 Documents in DB", doc_count)
+    st.sidebar.write(f"📚 Documents: {doc_count}")
 except:
     pass
 
-st.sidebar.markdown("---")
-
-# Quick Actions
-st.sidebar.subheader("⚡ Quick Actions")
-
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    if st.button("🗑️ Clear Chat"):
-        st.session_state.messages = []
-        st.session_state.chat_count = 0
-        st.rerun()
-with col2:
-    if st.button("💾 Export Chat"):
-        if st.session_state.messages:
-            export_data = {
-                "timestamp": datetime.now().isoformat(),
-                "messages": st.session_state.messages,
-                "persona": persona
-            }
-            json_data = json.dumps(export_data, indent=2)
-            st.sidebar.download_button(
-                label="📥 Download",
-                data=json_data,
-                file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json"
-            )
-        else:
-            st.sidebar.warning("No chat history")
+# Add clear chat button
+if st.sidebar.button("Clear Chat History"):
+    st.session_state.messages = []
+    st.rerun()
 
 # -------------------------------
 # HELPERS
@@ -415,12 +283,8 @@ def query_llm_with_fallback(llm_client, prompt_text):
 if uploaded_files:
     docs_to_add = []
     tmp_files = []
-    progress_text = st.sidebar.empty()
-    progress_bar = st.sidebar.progress(0)
-    
     try:
-        for i, uploaded in enumerate(uploaded_files):
-            progress_text.text(f"📄 Processing: {uploaded.name}")
+        for uploaded in uploaded_files:
             tmp_path = safe_write_uploaded_file(uploaded)
             tmp_files.append(tmp_path)
             try:
@@ -429,8 +293,6 @@ if uploaded_files:
                 docs_to_add.extend(loaded)
             except Exception as e:
                 st.sidebar.error(f"Failed to load {uploaded.name}: {e}")
-            progress_bar.progress((i + 1) / len(uploaded_files))
-        
         if docs_to_add:
             # chunk before adding
             chunks = chunk_documents(docs_to_add)
@@ -441,13 +303,11 @@ if uploaded_files:
                     vectorstore.save_local(FAISS_STORE_DIR)
                 except Exception:
                     st.sidebar.warning("Could not persist updated FAISS index.")
-                st.sidebar.success(f"✅ Added {len(docs_to_add)} documents successfully!")
+                st.sidebar.success("Documents added to vectorstore!")
                 st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Failed to add documents to vectorstore: {e}")
     finally:
-        progress_text.empty()
-        progress_bar.empty()
         # Cleanup temporary files
         for p in tmp_files:
             try:
@@ -456,47 +316,32 @@ if uploaded_files:
                 pass
 
 # -------------------------------
-# MAIN CONTENT
+# CHAT HISTORY
 # -------------------------------
-# Welcome Banner
-st.markdown("""
-<div class="welcome-banner">
-    <h1>🤖 PragyanAI Assistant</h1>
-    <p>Your intelligent companion for academic and career guidance</p>
-</div>
-""", unsafe_allow_html=True)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# Chat Statistics
+# Display title and stats
+st.title("🤖 PragyanAI AI Assistant")
+
+# Show chat stats
 if st.session_state.messages:
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("💬 Total Messages", len(st.session_state.messages))
+        st.metric("Total Messages", len(st.session_state.messages))
     with col2:
         user_msgs = sum(1 for msg in st.session_state.messages if msg["role"] == "user")
-        st.metric("👤 User Questions", user_msgs)
+        st.metric("User Questions", user_msgs)
     with col3:
         assistant_msgs = len(st.session_state.messages) - user_msgs
-        st.metric("🤖 AI Responses", assistant_msgs)
+        st.metric("AI Responses", assistant_msgs)
+    st.divider()
 
-# CHAT HISTORY
-st.markdown("---")
-
-for idx, msg in enumerate(st.session_state.messages):
+for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        # Add feedback buttons for assistant messages
-        if msg["role"] == "assistant" and idx > 0:
-            col1, col2, col3 = st.columns([1, 1, 8])
-            with col1:
-                if st.button("👍", key=f"like_{idx}"):
-                    st.session_state.feedback[idx] = "positive"
-                    st.toast("Thanks for your feedback! 👍", icon="👍")
-            with col2:
-                if st.button("👎", key=f"dislike_{idx}"):
-                    st.session_state.feedback[idx] = "negative"
-                    st.toast("We'll improve our responses! 👎", icon="👎")
 
-prompt = st.chat_input("Ask anything about PragyanAI programs...")
+prompt = st.chat_input("Ask anything...")
 
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -526,27 +371,12 @@ if prompt:
     with st.chat_message("assistant"):
         st.markdown(answer)
         
-        # Show source documents
+        # Show source documents in expander
         if docs:
-            with st.expander("📚 View Source Documents"):
+            with st.expander("📚 View Sources"):
                 for i, doc in enumerate(docs, 1):
-                    st.markdown(f"**Source {i}:**")
-                    st.text(doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content)
+                    st.write(f"**Source {i}:**")
+                    st.write(doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content)
                     st.divider()
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
-    st.session_state.chat_count += 1
-
-# -------------------------------
-# FOOTER
-# -------------------------------
-st.markdown("---")
-st.markdown(
-    f"""
-    <div style='text-align: center; color: #666; padding: 10px;'>
-        <p>🤖 PragyanAI Assistant v2.0 | Powered by <a href='https://groq.com' target='_blank'>Groq</a></p>
-        <p style='font-size: 12px;'>Active Persona: {persona} | Model: {GROQ_MODEL}</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
